@@ -46,6 +46,16 @@ class BridgeGUI:
     def _build_widgets(self) -> None:
         pad = {"padx": 10, "pady": 6}
 
+        # --- 顶部风险提示横幅 ---
+        warn = tk.Frame(self.root, bg="#fff3cd")
+        warn.pack(fill="x", padx=10, pady=(8, 0))
+        ttk.Label(
+            warn,
+            text="⚠ 账号安全提示：WorkBuddy API Key 仅限会员创建。请使用官方渠道获取的 Key，"
+                 "本工具通过隐身模式降低风控风险，但仍需遵守平台规则，请勿高频调用。",
+            background="#fff3cd", foreground="#856404", wraplength=720, justify="left",
+        ).pack(padx=10, pady=6)
+
         # --- 顶部：WorkBuddy 配置 ---
         top = ttk.LabelFrame(self.root, text="WorkBuddy 配置", padding=10)
         top.pack(fill="x", **pad)
@@ -108,6 +118,29 @@ class BridgeGUI:
             variable=self.var_auto_start,
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=2)
 
+        # --- 防风控（隐身）---
+        stealth = ttk.LabelFrame(self.root, text="防风控（隐身模式）", padding=10)
+        stealth.pack(fill="x", **pad)
+
+        self.var_stealth = tk.BooleanVar()
+        ttk.Checkbutton(
+            stealth, text="隐身模式：伪装 User-Agent、去除 Origin/Referer/X- 头（降低封号风险，推荐开启）",
+            variable=self.var_stealth,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=2)
+
+        ttk.Label(stealth, text="伪装 UA:").grid(row=1, column=0, sticky="w", pady=3)
+        self.var_spoof_ua = tk.StringVar()
+        ttk.Entry(stealth, textvariable=self.var_spoof_ua, width=40).grid(
+            row=1, column=1, sticky="w", pady=3, padx=(8, 0)
+        )
+
+        ttk.Label(stealth, text="速率限制(次/分):").grid(row=1, column=2, sticky="e", pady=3, padx=(16, 0))
+        self.var_rate_limit = tk.StringVar()
+        ttk.Entry(stealth, textvariable=self.var_rate_limit, width=8).grid(
+            row=1, column=3, sticky="w", pady=3, padx=(8, 0)
+        )
+        stealth.columnconfigure(1, weight=1)
+
         # --- 控制按钮 ---
         ctrl = ttk.Frame(self.root)
         ctrl.pack(fill="x", **pad)
@@ -145,12 +178,19 @@ class BridgeGUI:
         self.var_strip_thinking.set(self.config.get("strip_deepseek_thinking_field", False))
         self.var_reasoning.set(self.config.get("use_reasoning_effort", True))
         self.var_auto_start.set(self.config.get("auto_start", False))
+        self.var_stealth.set(self.config.get("stealth_mode", True))
+        self.var_spoof_ua.set(self.config.get("spoof_user_agent", "OpenAI-Python/1.54.0"))
+        self.var_rate_limit.set(str(self.config.get("rate_limit_per_minute", 60)))
 
     def _collect_form(self) -> None:
         try:
             port = int(self.var_port.get().strip())
         except ValueError:
             port = 18789
+        try:
+            rate_limit = int(self.var_rate_limit.get().strip())
+        except ValueError:
+            rate_limit = 60
         self.config.update({
             "workbuddy_base_url": self.var_base_url.get().strip(),
             "workbuddy_api_key": self.var_api_key.get().strip(),
@@ -160,6 +200,9 @@ class BridgeGUI:
             "strip_deepseek_thinking_field": self.var_strip_thinking.get(),
             "use_reasoning_effort": self.var_reasoning.get(),
             "auto_start": self.var_auto_start.get(),
+            "stealth_mode": self.var_stealth.get(),
+            "spoof_user_agent": self.var_spoof_ua.get().strip() or "OpenAI-Python/1.54.0",
+            "rate_limit_per_minute": rate_limit,
         })
 
     def save_config(self) -> None:

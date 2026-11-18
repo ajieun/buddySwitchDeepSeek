@@ -51,27 +51,62 @@ def translate_request_body(
     return data, changes
 
 
+# 这些头会暴露客户端来源（DeepSeek Harness / 浏览器），隐身模式下一律去除
+_STRIP_HEADERS = {
+    "user-agent",
+    "origin",
+    "referer",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
+    "upgrade-insecure-requests",
+    "priority",
+}
+
+# 这些头由代理自身管理，不转发
+_MANAGED_HEADERS = {
+    "authorization",
+    "host",
+    "content-length",
+    "connection",
+    "accept-encoding",
+}
+
+
 def translate_request_headers(
     headers: Dict[str, str],
     workbuddy_api_key: str,
+    *,
+    stealth_mode: bool = True,
+    spoof_user_agent: str = "OpenAI-Python/1.54.0",
 ) -> Dict[str, str]:
-    """构造发往 WorkBuddy 的请求头。"""
+    """构造发往 WorkBuddy 的请求头，隐身模式下去除客户端指纹。"""
     out: Dict[str, str] = {}
     for k, v in headers.items():
         lk = k.lower()
-        # 去掉客户端传来的鉴权与连接相关头，由代理重新设置
-        if lk in (
-            "authorization",
-            "host",
-            "content-length",
-            "connection",
-            "accept-encoding",
-        ):
+        if lk in _MANAGED_HEADERS:
+            continue
+        if stealth_mode and lk in _STRIP_HEADERS:
+            continue
+        # 隐身模式下去掉所有 X- 开头的自定义头（DeepSeek Harness 可能注入）
+        if stealth_mode and lk.startswith("x-"):
             continue
         out[k] = v
     out["Authorization"] = f"Bearer {workbuddy_api_key}"
     out["Accept"] = "application/json, text/event-stream"
+    if stealth_mode:
+        out["User-Agent"] = spoof_user_agent
     return out
+
+
+def mask_api_key(key: str) -> str:
+    """对 API Key 做脱敏，仅保留首尾字符用于日志。"""
+    if not key:
+        return ""
+    if len(key) <= 10:
+        return key[:2] + "***"
+    return key[:4] + "***" + key[-4:]
 
 
 def build_models_response(models: list) -> Dict[str, Any]:

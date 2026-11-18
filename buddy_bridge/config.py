@@ -19,6 +19,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "translate_max_completion_tokens": True,
     "strip_deepseek_thinking_field": False,
     "use_reasoning_effort": True,
+    # 防风控（隐身）
+    "stealth_mode": True,
+    "rate_limit_per_minute": 60,
+    "spoof_user_agent": "OpenAI-Python/1.54.0",
     # 运行时
     "auto_start": False,
     "log_level": "INFO",

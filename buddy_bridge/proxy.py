@@ -1,12 +1,11 @@
 """本地 HTTP 代理服务器：桥接 DeepSeek Harness 与 WorkBuddy。"""
 
-import gzip
-import io
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
-import zlib
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -15,6 +14,7 @@ from .config import ConfigManager
 from .logger import BridgeLogger
 from .translator import (
     build_models_response,
+    mask_api_key,
     translate_request_body,
     translate_request_headers,
 )
@@ -30,12 +30,38 @@ DEFAULT_MODELS = [
 ]
 
 
+class RateLimiter:
+    """滑动窗口速率限制器，防止异常流量触发 WorkBuddy 风控。"""
+
+    def __init__(self, max_per_minute: int = 60) -> None:
+        self._max = max(1, max_per_minute)
+        self._timestamps: deque = deque()
+        self._lock = threading.Lock()
+
+    def set_limit(self, max_per_minute: int) -> None:
+        with self._lock:
+            self._max = max(1, max_per_minute)
+
+    def allow(self) -> bool:
+        now = time.time()
+        with self._lock:
+            # 清理 60 秒前的时间戳
+            cutoff = now - 60
+            while self._timestamps and self._timestamps[0] < cutoff:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self._max:
+                return False
+            self._timestamps.append(now)
+            return True
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     """处理来自 DeepSeek Harness 的请求并转发到 WorkBuddy。"""
 
     # 由 ProxyServer 注入
     config: ConfigManager
     logger: BridgeLogger
+    rate_limiter: RateLimiter
     upstream_base: str  # 例如 https://gw.goworkbuddy.cn
 
     server_version = "BuddyBridge/1.0"
@@ -100,6 +126,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             req = urllib.request.Request(upstream_url, method="GET")
             req.add_header("Authorization", f"Bearer {api_key}")
             req.add_header("Accept", "application/json")
+            if self.config.get("stealth_mode", True):
+                req.add_header("User-Agent", self.config.get("spoof_user_agent", "OpenAI-Python/1.54.0"))
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             self._send_json(200, data)
@@ -111,6 +139,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         api_key = self.config.get("workbuddy_api_key", "")
         if not api_key:
             self._send_error_json(400, "尚未配置 WorkBuddy API Key", "missing_api_key")
+            return
+
+        # 速率限制：防止异常流量触发 WorkBuddy 风控
+        rate_limit = int(self.config.get("rate_limit_per_minute", 60))
+        if rate_limit > 0 and not self.rate_limiter.allow():
+            self.logger.warning("请求被速率限制（%d 次/分钟），已拒绝", rate_limit)
+            self._send_error_json(429, "请求过于频繁，请稍后再试", "rate_limited")
             return
 
         path = urlparse(self.path).path
@@ -140,16 +175,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
         else:
             forward_body = raw_body
 
-        upstream_headers = translate_request_headers(dict(self.headers), api_key)
+        upstream_headers = translate_request_headers(
+            dict(self.headers),
+            api_key,
+            stealth_mode=self.config.get("stealth_mode", True),
+            spoof_user_agent=self.config.get("spoof_user_agent", "OpenAI-Python/1.54.0"),
+        )
         upstream_headers["Content-Type"] = self.headers.get("Content-Type", "application/json")
 
         model = body_json.get("model", "?") if body_json else "?"
         self.logger.info(
-            "%s %s -> %s (model=%s%s)",
+            "%s %s -> %s (model=%s, key=%s%s)",
             method,
             path,
             upstream_url,
             model,
+            mask_api_key(api_key),
             ", " + "; ".join(changes) if changes else "",
         )
 
@@ -247,6 +288,7 @@ class ProxyServer:
     def __init__(self, config: ConfigManager, logger: BridgeLogger) -> None:
         self.config = config
         self.logger = logger
+        self.rate_limiter = RateLimiter(int(config.get("rate_limit_per_minute", 60)))
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
@@ -262,6 +304,9 @@ class ProxyServer:
         host = self.config.get("listen_host", "127.0.0.1")
         port = int(self.config.get("listen_port", 18789))
 
+        # 同步速率限制配置
+        self.rate_limiter.set_limit(int(self.config.get("rate_limit_per_minute", 60)))
+
         # 注入 handler 依赖
         handler_cls = type(
             "BoundProxyHandler",
@@ -269,6 +314,7 @@ class ProxyServer:
             {
                 "config": self.config,
                 "logger": self.logger,
+                "rate_limiter": self.rate_limiter,
                 "upstream_base": self.config.get("workbuddy_base_url", ""),
             },
         )
