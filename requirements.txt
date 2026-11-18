@@ -1,0 +1,4 @@
+# BuddyBridge 仅依赖 Python 标准库，无需安装第三方包。
+# 如需打包为独立可执行文件，请安装 PyInstaller：
+#   pip install pyinstaller
+#   python build.py
