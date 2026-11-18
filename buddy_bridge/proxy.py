@@ -186,32 +186,48 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         # 把上游响应头转发回去
         self.send_response(resp.status)
+        content_type = None
         for k, v in resp.headers.items():
             lk = k.lower()
             if lk in ("content-length", "transfer-encoding", "connection", "content-encoding"):
                 continue
+            if lk == "content-type":
+                content_type = v
+                continue
             self.send_header(k, v)
         self.send_header("Access-Control-Allow-Origin", "*")
+
         if is_stream:
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
-        self.end_headers()
-
-        # 流式转发
-        try:
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            self.logger.debug("客户端断开连接")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.error("转发响应时出错: %s", exc)
-        finally:
+            self.end_headers()
+            # 流式逐块转发
+            try:
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                self.logger.debug("客户端断开连接")
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error("转发流式响应时出错: %s", exc)
+            finally:
+                resp.close()
+        else:
+            # 非流式：缓冲完整响应并设置 Content-Length，避免客户端挂起
+            body = resp.read()
             resp.close()
+            if content_type:
+                self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                self.logger.debug("客户端断开连接")
 
     def _build_upstream_url(self, path: str) -> Optional[str]:
         base = self.config.get("workbuddy_base_url", "").rstrip("/")
