@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BuddyBridge 终端</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --border: rgba(0,0,0,.12);
+    --text: #1c1c1e;
+    --text-soft: #6b6b70;
+    --accent: #185fa5;
+    --accent-soft: rgba(24,95,165,.08);
+    --term-bg: #1b1b1f;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1c;
+      --bg-soft: #232326;
+      --border: rgba(255,255,255,.14);
+      --text: #e8e8ea;
+      --text-soft: #9a9aa0;
+      --accent: #85b7eb;
+      --accent-soft: rgba(133,183,235,.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-soft);
+    flex: 0 0 auto;
+  }
+  #tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1 1 auto; }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    color: var(--text-soft);
+    max-width: 220px;
+  }
+  .tab:hover { background: var(--accent-soft); }
+  .tab.active {
+    background: var(--bg);
+    border-color: var(--border);
+    color: var(--text);
+  }
+  .tab .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #9a9aa0; flex: 0 0 auto;
+  }
+  .tab.alive .dot { background: #3fa45b; }
+  .tab .name { overflow: hidden; text-overflow: ellipsis; }
+  .tab .x { opacity: .5; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .tab .x:hover { opacity: 1; }
+
+  header button, .panel button, .tr-head button {
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+  header button:hover, .panel button:hover { background: var(--accent-soft); }
+  #status { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
+
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  #terminals { flex: 1 1 auto; position: relative; background: var(--term-bg); min-width: 0; }
+  .term-wrap {
+    position: absolute;
+    inset: 0;
+    padding: 8px 6px 0 10px;
+    display: none;
+  }
+  .term-wrap.active { display: block; }
+  .term-wrap .xterm { height: 100%; }
+
+  #side {
+    flex: 0 0 320px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    min-height: 0;
+  }
+  #side.collapsed { display: none; }
+  .tr-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+  #tr-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 10px 16px; }
+  .tr-item { padding: 7px 0; border-bottom: 1px dashed var(--border); }
+  .tr-src {
+    font-size: 11px;
+    color: var(--text-soft);
+    font-family: Consolas, "Cascadia Mono", monospace;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .tr-dst { font-size: 13px; line-height: 1.55; margin-top: 2px; word-break: break-word; }
+  .tr-empty { color: var(--text-soft); font-size: 12px; padding: 16px 4px; line-height: 1.7; }
+
+  .panel {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-soft);
+    overflow-x: auto;
+  }
+  .panel .keys { display: flex; gap: 4px; flex: 0 0 auto; }
+  .panel button {
+    font-family: Consolas, "Cascadia Mono", monospace;
+    min-width: 34px;
+  }
+  .panel input {
+    flex: 1 1 auto;
+    min-width: 120px;
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
+  }
+  .panel input:focus { border-color: var(--accent); }
+  .panel .sep { width: 1px; height: 20px; background: var(--border); flex: 0 0 auto; }
+
+  .hint {
+    position: absolute; right: 12px; bottom: 10px;
+    font-size: 11px; color: var(--text-soft);
+    pointer-events: none;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+    background: rgba(0,0,0,.82); color: #fff;
+    font-size: 12px; padding: 8px 14px; border-radius: 8px;
+    opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div id="tabs"></div>
+  <button id="new-tab" title="新建终端">+ 新终端</button>
+  <button id="toggle-side" title="显示/隐藏译文">译文</button>
+  <span id="status">未连接</span>
+</header>
+
+<main>
+  <section id="terminals"></section>
+  <aside id="side">
+    <div class="tr-head">
+      <span>译文 · 实时英译中</span>
+      <button id="clear-tr">清空</button>
+    </div>
+    <div id="tr-list">
+      <div class="tr-empty">
+        终端里的英文提示会自动翻译到这里。<br>
+        左侧原文一字不改，右下栏只是辅助阅读。
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div class="panel">
+  <div class="keys" id="key-buttons"></div>
+  <div class="sep"></div>
+  <input id="cmd" placeholder="在这里输入，回车即发送到终端（不用记命令）" autocomplete="off">
+</div>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var TOKEN = new URLSearchParams(location.search).get("token") || "";
+  var sessions = new Map();
+  var activeSid = null;
+
+  var tabsEl = document.getElementById("tabs");
+  var termHost = document.getElementById("terminals");
+  var trList = document.getElementById("tr-list");
+  var statusEl = document.getElementById("status");
+  var sideEl = document.getElementById("side");
+
+  var KEY_SEQ = [
+    ["Esc", "\u001b"],
+    ["Tab", "\t"],
+    ["Enter", "\r"],
+    ["↑", "\u001b[A"],
+    ["↓", "\u001b[B"],
+    ["←", "\u001b[D"],
+    ["→", "\u001b[C"],
+    ["Ctrl+C", "\u0003"]
+  ];
+
+  function qs(obj) {
+    return Object.keys(obj).map(function (k) {
+      return encodeURIComponent(k) + "=" + encodeURIComponent(obj[k]);
+    }).join("&");
+  }
+
+  function toast(msg) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.classList.remove("show"); }, 1800);
+  }
+
+  function wsUrl(sid) {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return proto + "//" + location.host + "/ws?sid=" + encodeURIComponent(sid) +
+           (TOKEN ? "&token=" + encodeURIComponent(TOKEN) : "");
+  }
+
+  // ---------------- 终端实例 ----------------
+  function createSession(sid, info) {
+    if (sessions.has(sid)) return sessions.get(sid);
+
+    var wrap = document.createElement("div");
+    wrap.className = "term-wrap";
+    termHost.appendChild(wrap);
+
+    var term = new Terminal({
+      fontSize: 13,
+      fontFamily: 'Consolas, "Cascadia Mono", "Microsoft YaHei Mono", monospace',
+      cursorBlink: true,
+      scrollback: 6000,
+      allowProposedApi: true,
+      theme: {
+        background: "#1b1b1f",
+        foreground: "#e4e4e7",
+        cursor: "#e4e4e7",
+        selectionBackground: "rgba(133,183,235,.35)"
+      }
+    });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(wrap);
+
+    var entry = {
+      sid: sid, term: term, fit: fit, wrap: wrap,
+      ws: null, alive: true, retry: 0, info: info || {}
+    };
+    sessions.set(sid, entry);
+
+    term.onData(function (data) {
+      send(entry, { type: "input", data: data });
+    });
+
+    term.onResize(function (size) {
+      send(entry, { type: "resize", cols: size.cols, rows: size.rows });
+    });
+
+    addTab(entry);
+    connect(entry);
+    return entry;
+  }
+
+  function connect(entry) {
+    if (entry.ws && entry.ws.readyState <= 1) return;
+    var sock = new WebSocket(wsUrl(entry.sid));
+    entry.ws = sock;
+
+    sock.onopen = function () {
+      entry.retry = 0;
+      setStatus("已连接", true);
+      setTimeout(function () { doFit(entry); }, 30);
+    };
+
+    sock.onmessage = function (ev) {
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "output") {
+        entry.term.write(msg.data);
+      } else if (msg.type === "translation") {
+        appendTranslation(msg.items || []);
+      } else if (msg.type === "exit") {
+        entry.alive = false;
+        entry.term.write("\r\n\x1b[33m[进程已退出，代码 " +
+          (msg.code === null ? "未知" : msg.code) + "]\x1b[0m\r\n");
+        refreshTab(entry);
+      } else if (msg.type === "ready") {
+        entry.info = msg.session || entry.info;
+        refreshTab(entry);
+      }
+    };
+
+    sock.onclose = function () {
+      setStatus("已断开", false);
+      if (!entry.alive) return;
+      entry.retry = Math.min(entry.retry + 1, 6);
+      var delay = Math.min(500 * Math.pow(2, entry.retry - 1), 8000);
+      setTimeout(function () { connect(entry); }, delay);
+    };
+
+    sock.onerror = function () { /* onclose 会接手 */ };
+  }
+
+  function send(entry, payload) {
+    if (entry.ws && entry.ws.readyState === 1) {
+      entry.ws.send(JSON.stringify(payload));
+      return true;
+    }
+    return false;
+  }
+
+  function doFit(entry) {
+    try {
+      entry.fit.fit();
+      send(entry, { type: "resize", cols: entry.term.cols, rows: entry.term.rows });
+    } catch (e) { /* 容器未布局完成时忽略 */ }
+  }
+
+  // ---------------- 标签 ----------------
+  function addTab(entry) {
+    var el = document.createElement("div");
+    el.className = "tab";
+    el.dataset.sid = entry.sid;
+    el.innerHTML = '<span class="dot"></span><span class="name"></span><span class="x">×</span>';
+    el.querySelector(".name").textContent = entry.info.title || entry.sid;
+    el.addEventListener("click", function (ev) {
+      if (ev.target.classList.contains("x")) {
+        closeSession(entry.sid);
+      } else {
+        activate(entry.sid);
+      }
+    });
+    tabsEl.appendChild(el);
+    entry.tabEl = el;
+    activate(entry.sid);
+  }
+
+  function refreshTab(entry) {
+    if (!entry.tabEl) return;
+    entry.tabEl.classList.toggle("alive", !!entry.alive);
+    var name = entry.info.title || entry.sid;
+    entry.tabEl.querySelector(".name").textContent = name;
+  }
+
+  function activate(sid) {
+    activeSid = sid;
+    sessions.forEach(function (e, id) {
+      var on = id === sid;
+      e.wrap.classList.toggle("active", on);
+      e.tabEl.classList.toggle("active", on);
+    });
+    var entry = sessions.get(sid);
+    if (entry) {
+      setTimeout(function () { doFit(entry); entry.term.focus(); }, 20);
+    }
+  }
+
+  function closeSession(sid) {
+    var entry = sessions.get(sid);
+    if (entry) {
+      if (entry.ws) { try { entry.ws.close(); } catch (e) {} }
+      entry.term.dispose();
+      entry.wrap.remove();
+      entry.tabEl.remove();
+      sessions.delete(sid);
+    }
+    fetch("/api/sessions/" + encodeURIComponent(sid) +
+          (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""),
+          { method: "DELETE" }).catch(function () {});
+    if (activeSid === sid) {
+      var next = sessions.keys().next();
+      activeSid = next.done ? null : next.value;
+      if (activeSid) activate(activeSid);
+    }
+    if (sessions.size === 0) setStatus("无会话", false);
+  }
+
+  function setStatus(text, ok) {
+    statusEl.textContent = text;
+    statusEl.style.color = ok ? "#3fa45b" : "";
+  }
+
+  // ---------------- 译文栏 ----------------
+  var MAX_TR = 300;
+
+  function appendTranslation(items) {
+    if (!items.length) return;
+    var nearBottom = trList.scrollHeight - trList.scrollTop - trList.clientHeight < 80;
+    var empty = trList.querySelector(".tr-empty");
+    if (empty) empty.remove();
+
+    items.forEach(function (it) {
+      if (!it || !it.dst) return;
+      var row = document.createElement("div");
+      row.className = "tr-item";
+      var s = document.createElement("div");
+      s.className = "tr-src";
+      s.textContent = it.src;
+      var d = document.createElement("div");
+      d.className = "tr-dst";
+      d.textContent = it.dst;
+      row.appendChild(s);
+      row.appendChild(d);
+      trList.appendChild(row);
+    });
+
+    while (trList.children.length > MAX_TR) {
+      trList.removeChild(trList.firstChild);
+    }
+    if (nearBottom) trList.scrollTop = trList.scrollHeight;
+  }
+
+  // ---------------- 按键面板 ----------------
+  var keyHost = document.getElementById("key-buttons");
+  KEY_SEQ.forEach(function (pair) {
+    var b = document.createElement("button");
+    b.textContent = pair[0];
+    b.title = "发送 " + pair[0];
+    b.addEventListener("click", function () {
+      var entry = sessions.get(activeSid);
+      if (entry) {
+        send(entry, { type: "input", data: pair[1] });
+        entry.term.focus();
+      }
+    });
+    keyHost.appendChild(b);
+  });
+
+  var cmdInput = document.getElementById("cmd");
+  cmdInput.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter") return;
+    var entry = sessions.get(activeSid);
+    var text = cmdInput.value;
+    if (!entry || !text) return;
+    send(entry, { type: "input", data: text + "\r" });
+    cmdInput.value = "";
+    entry.term.focus();
+  });
+
+  // ---------------- 新建会话 ----------------
+  document.getElementById("new-tab").addEventListener("click", function () {
+    var cmd = prompt("启动什么？（留空 = 默认 shell）", "");
+    if (cmd === null) return;
+    var argv = cmd.trim() ? cmd.trim().split(/\s+/) : null;
+    fetch("/api/sessions" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ argv: argv, cols: 100, rows: 30 })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { toast(data.error || "创建失败"); return; }
+      createSession(data.session.id, data.session);
+    }).catch(function () { toast("无法连接服务"); });
+  });
+
+  document.getElementById("toggle-side").addEventListener("click", function () {
+    sideEl.classList.toggle("collapsed");
+    var entry = sessions.get(activeSid);
+    if (entry) setTimeout(function () { doFit(entry); }, 60);
+  });
+
+  document.getElementById("clear-tr").addEventListener("click", function () {
+    trList.innerHTML = '<div class="tr-empty">已清空。新的英文提示会继续出现在这里。</div>';
+  });
+
+  // ---------------- 初始化 ----------------
+  function boot() {
+    fetch("/api/sessions" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var list = (data && data.sessions) || [];
+        if (!list.length) {
+          setStatus("无会话", false);
+          return;
+        }
+        list.forEach(function (info) { createSession(info.id, info); });
+      })
+      .catch(function () { setStatus("服务未响应", false); });
+  }
+
+  window.addEventListener("resize", function () {
+    var entry = sessions.get(activeSid);
+    if (entry) doFit(entry);
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>

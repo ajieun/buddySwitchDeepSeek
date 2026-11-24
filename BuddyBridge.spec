@@ -1,4 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
 from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports = ['tkinter', 'tkinter.ttk', 'tkinter.scrolledtext']
@@ -6,7 +8,7 @@ hiddenimports += collect_submodules('buddy_bridge')
 
 
 a = Analysis(
-    ['/workspace/run.py'],
+    [os.path.join(SPECPATH, 'run.py')],
     pathex=[],
     binaries=[],
     datas=[],

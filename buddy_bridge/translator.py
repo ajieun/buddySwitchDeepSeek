@@ -62,16 +62,36 @@ _STRIP_HEADERS = {
     "sec-fetch-user",
     "upgrade-insecure-requests",
     "priority",
+    "x-bridge-token",
 }
 
 # 这些头由代理自身管理，不转发
 _MANAGED_HEADERS = {
     "authorization",
+    "x-api-key",
     "host",
     "content-length",
     "connection",
     "accept-encoding",
+    "transfer-encoding",
+    "proxy-authorization",
+    "proxy-connection",
+    "cookie",
 }
+
+
+def _clean_value(value: Any) -> Optional[str]:
+    """拒绝含 CRLF / 控制字符的头值，防止请求头注入。"""
+    if value is None:
+        return None
+    s = str(value)
+    if any(c in s for c in ("\r", "\n", "\x00")) or any(ord(c) < 32 for c in s):
+        return None
+    try:
+        s.encode("latin-1")  # http.client 只接受 latin-1 头值
+    except UnicodeEncodeError:
+        return None
+    return s[:4096]
 
 
 def translate_request_headers(
@@ -80,11 +100,17 @@ def translate_request_headers(
     *,
     stealth_mode: bool = True,
     spoof_user_agent: str = "OpenAI-Python/1.54.0",
+    auth_header_mode: str = "bearer",
 ) -> Dict[str, str]:
-    """构造发往 WorkBuddy 的请求头，隐身模式下去除客户端指纹。"""
+    """构造发往 WorkBuddy 的请求头，隐身模式下去除客户端指纹。
+
+    auth_header_mode:
+      bearer   -> Authorization: Bearer <key>（多数 OpenAI 兼容网关）
+      x-api-key-> X-Api-Key: <key>（CodeBuddy/WorkBuddy 官方 API Key 认证）
+    """
     out: Dict[str, str] = {}
     for k, v in headers.items():
-        lk = k.lower()
+        lk = str(k).lower()
         if lk in _MANAGED_HEADERS:
             continue
         if stealth_mode and lk in _STRIP_HEADERS:
@@ -92,11 +118,20 @@ def translate_request_headers(
         # 隐身模式下去掉所有 X- 开头的自定义头（DeepSeek Harness 可能注入）
         if stealth_mode and lk.startswith("x-"):
             continue
-        out[k] = v
-    out["Authorization"] = f"Bearer {workbuddy_api_key}"
+        clean = _clean_value(v)
+        if clean is None or not str(k).isascii() or any(ord(c) < 33 or ord(c) > 126 for c in str(k)):
+            continue
+        out[str(k)] = clean
+
+    if auth_header_mode == "x-api-key":
+        out["X-Api-Key"] = workbuddy_api_key
+    else:
+        out["Authorization"] = f"Bearer {workbuddy_api_key}"
     out["Accept"] = "application/json, text/event-stream"
+    # 明确要求上游不压缩：否则我们过滤掉 Content-Encoding 后客户端会拿到无法解析的 gzip 数据
+    out["Accept-Encoding"] = "identity"
     if stealth_mode:
-        out["User-Agent"] = spoof_user_agent
+        out["User-Agent"] = spoof_user_agent or "OpenAI-Python/1.54.0"
     return out
 
 

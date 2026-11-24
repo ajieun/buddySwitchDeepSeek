@@ -4,7 +4,7 @@ import logging
 import threading
 from collections import deque
 from datetime import datetime
-from typing import Callable, Deque, List, Optional
+from typing import Any, Callable, Deque, List, Optional
 
 
 class BridgeLogger:
